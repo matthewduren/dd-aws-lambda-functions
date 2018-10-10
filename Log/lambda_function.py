@@ -18,9 +18,9 @@ import socket
 import ssl
 import re
 try:
-    import io # Python3
-except ImportError:
     import StringIO as io # Python2
+except ImportError:
+    import io # Python3
 import gzip
 import boto3
 
@@ -231,8 +231,11 @@ class LogHandler():
 
         # If the name has a .gz extension, then decompress the data
         if key[-3:] == '.gz':
-            with gzip.GzipFile(fileobj=io.StringIO(data)) as decompress_stream:
-                data = decompress_stream.read()
+            try:
+                data = gzip.decompress(data)
+            except AttributeError:
+                with gzip.GzipFile(fileobj=io.StringIO(data)) as decompress_stream:
+                    data = str(decompress_stream.read())
 
         if self.is_cloudtrail(str(key)):
             cloud_trail = json.loads(data)
@@ -253,10 +256,13 @@ class LogHandler():
     def awslogs(self):
         """Handler for cloudwatch logs"""
         # Get logs
-        obj = io.StringIO(base64.b64decode(self.event["awslogs"]["data"]))
-        with gzip.GzipFile(fileobj=obj) as decompress_stream:
-            data = decompress_stream.read()
-        logs = json.loads(str(data))
+        data_gz = base64.b64decode(self.event["awslogs"]["data"])
+        try:
+            data = gzip.decompress(data_gz)
+        except AttributeError:
+            with gzip.GzipFile(fileobj=io.StringIO(data_gz)) as decompress_stream:
+                data = decompress_stream.read()
+        logs = json.loads(data)
         #Set the source on the logs
         METADATA[DD_SOURCE] = self.parse_event_source(logs.get("logGroup", "cloudwatch"))
         ##default service to source value
