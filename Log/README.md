@@ -25,7 +25,7 @@ The provided Python script must be deployed into your AWS Lambda service. We wil
 ## 2. Provide the code
 
 - Copy paste the code of the Lambda function
-- Set the runtime to `Python 2.7`
+- Set the runtime to `Python 3.6`
 - Set the handler to `lambda_function.lambda_handler`
 
 
