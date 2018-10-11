@@ -222,7 +222,7 @@ class LogHandler():
         """Retrieve tags from cloudwatch log stream and add to dd tags"""
         logs_client = boto3.client("logs")
         tag_response = logs_client.list_tags_log_group(logGroupName=logs["logGroup"])
-        list_of_tags = ["{}:{}".format(k, v) for k, v in tag_response.get("tags", {}).items()]
+        list_of_tags = ["tag_{}:{}".format(k, v) for k, v in tag_response.get("tags", {}).items()]
         if list_of_tags:
             METADATA[DD_CUSTOM_TAGS].update(list_of_tags)
 
