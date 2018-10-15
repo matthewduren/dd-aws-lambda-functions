@@ -312,11 +312,15 @@ class LogHandler():
         if ENABLE_LOGSTREAM_TAGS == "true":
             self.add_cloudwatch_tags(logs)
 
+        structured_logs = []
+
         # Send lines to Datadog
         for log in logs["logEvents"]:
             structured_line = self.build_structured_line(log, logs, arn)
             structured_line = self.set_status(structured_line)
-            yield structured_line
+            structured_logs.append(structured_line)
+
+        return structured_logs
 
     def get_lambda_arn(self, logs):
         """
