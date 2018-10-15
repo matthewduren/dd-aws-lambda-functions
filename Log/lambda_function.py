@@ -51,8 +51,9 @@ DD_TAGS = os.getenv("DD_TAGS", "")
 IP_REGEX = re.compile(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}", re.I)
 CLOUDTRAIL_REGEX = re.compile(r"\d+_CloudTrail_\w{2}-\w{4,9}-\d_\d{8}T\d{4}Z.+.json.gz$", re.I)
 DEBUG_REGEX = re.compile(r"^.*debug.*$", re.I)
+INFO_REGEX = re.compile(r"^.*info.*$", re.I)
 WARN_REGEX = re.compile(r"^.*warn.*$", re.I)
-ERROR_REGEX = re.compile(r"^.*err|exception|traceback|fail|fatal|crit|panic.*$", re.I)
+ERROR_REGEX = re.compile(r"^.*error|exception|traceback|fail|fatal|crit|panic.*$", re.I)
 DD_SOURCE = "ddsource"
 DD_CUSTOM_TAGS = "ddtags"
 DD_SERVICE = "service"
@@ -137,7 +138,7 @@ def parse_event_type(log_handler, event):
     elif "awslogs" in event:
         handler_name = "awslogs"
     elif "detail" in event:
-        handler_name = "events"
+        handler_name = "cwevent"
 
     try:
         handler = getattr(log_handler, handler_name)
@@ -209,12 +210,14 @@ class LogHandler():
     def set_status(cls, log):
         """Set a status attribute for all logs"""
         message = log.get("message", "")
-        if DEBUG_REGEX.search(message):
-            log[DD_STATUS] = "Debug"
-        if WARN_REGEX.search(message):
-            log[DD_STATUS] = "Warn"
         if ERROR_REGEX.search(message):
             log[DD_STATUS] = "Error"
+        if WARN_REGEX.search(message):
+            log[DD_STATUS] = "Warn"
+        if INFO_REGEX.search(message):
+            log[DD_STATUS] = "Info"
+        if DEBUG_REGEX.search(message):
+            log[DD_STATUS] = "Debug"
         return log
 
     @classmethod
@@ -222,9 +225,13 @@ class LogHandler():
         """Retrieve tags from cloudwatch log stream and add to dd tags"""
         logs_client = boto3.client("logs")
         tag_response = logs_client.list_tags_log_group(logGroupName=logs["logGroup"])
-        list_of_tags = ["tag_{}:{}".format(k, v) for k, v in tag_response.get("tags", {}).items()]
+        list_of_tags = ["{}:{}".format(k, v) for k, v in tag_response.get("tags", {}).items()]
         if list_of_tags:
             METADATA[DD_CUSTOM_TAGS].update(list_of_tags)
+        # Since service is a reserved tag, we grab it and overwrite the datadog default
+        service_tag = tag_response.get("tags", {}).get("service")
+        if service_tag:
+            METADATA[DD_SERVICE] = str(service_tag)
 
     def parse_event_source(self, key):
         """Returns a method based on event source"""
@@ -259,8 +266,6 @@ class LogHandler():
         response = s3.get_object(Bucket=bucket, Key=key)
         data = response["Body"].read()
 
-        structured_logs = []
-
         # If the name has a .gz extension, then decompress the data
         if key[-3:] == ".gz":
             try:
@@ -275,16 +280,14 @@ class LogHandler():
                 # Create structured object and send it
                 s3_base_event = {"aws": {"s3": {"bucket": bucket, "key": key}}}
                 structured_line = merge_dicts(record, s3_base_event)
-                structured_logs.append(structured_line)
+                yield structured_line
         else:
             # Send lines to Datadog
             for line in data.splitlines():
                 # Create structured object and send it
                 structured_line = {"aws": {"s3": {"bucket": bucket, "key": key}}, "message": line}
                 structured_line = self.set_status(structured_line)
-                structured_logs.append(structured_line)
-
-        return structured_logs
+                yield structured_line
 
     def awslogs(self):
         """Handler for cloudwatch logs"""
@@ -301,8 +304,6 @@ class LogHandler():
         ##default service to source value
         METADATA[DD_SERVICE] = METADATA[DD_SOURCE]
 
-        structured_logs = []
-
         arn = None
         if METADATA[DD_SOURCE] == "lambda":
             arn = self.get_lambda_arn(logs)
@@ -315,9 +316,7 @@ class LogHandler():
         for log in logs["logEvents"]:
             structured_line = self.build_structured_line(log, logs, arn)
             structured_line = self.set_status(structured_line)
-            structured_logs.append(structured_line)
-
-        return structured_logs
+            yield structured_line
 
     def get_lambda_arn(self, logs):
         """
@@ -340,7 +339,7 @@ class LogHandler():
         return arn
 
     @classmethod
-    def build_structured_line(self, log, logs, arn):
+    def build_structured_line(cls, log, logs, arn):
         """Build structured line object"""
         # Create structured object and send it
         structured_line = merge_dicts(log, {
@@ -373,20 +372,14 @@ class LogHandler():
         ##default service to source value
         METADATA[DD_SERVICE] = METADATA[DD_SOURCE]
 
-        structured_logs = []
-        structured_logs.append(self.event)
-
-        return structured_logs
+        yield self.event
 
     def sns(self):
         """Handler for sns events"""
         # Set the source on the log
         METADATA[DD_SOURCE] = self.parse_event_source("sns")
-        structured_logs = []
 
         for record in self.event["Records"]:
             # Create structured object and send it
             structured_line = record
-            structured_logs.append(structured_line)
-
-        return structured_logs
+            yield structured_line
